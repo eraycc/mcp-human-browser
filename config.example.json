@@ -1,0 +1,18 @@
+{
+  "browserPreference": ["chrome", "edge"],
+  "chromePath": null,
+  "edgePath": null,
+  "chromeUserDataDir": "%LOCALAPPDATA%\\HumanChromeProfile",
+  "edgeUserDataDir": "%LOCALAPPDATA%\\HumanEdgeProfile",
+  "debuggingAddress": "127.0.0.1",
+  "debuggingPort": 9222,
+  "headless": false,
+  "browserStartupTimeoutMs": 30000,
+  "mcpPackage": "chrome-devtools-mcp@latest",
+  "mcpArgs": [],
+  "extraBrowserArgs": [],
+  "guardTimeoutMs": 5000,
+  "launchClaimTimeoutMs": 40000,
+  "heartbeatIntervalMs": 2000,
+  "heartbeatTimeoutMs": 10000
+}
