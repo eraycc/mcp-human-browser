@@ -20,6 +20,18 @@ The user's requested outcome defines the authorized scope. Do not ask for anothe
 - Do not extend the task merely because the browser is available. A request to inspect an account does not authorize a purchase, post, deletion, subscription, or unrelated account change.
 - Never persist conversation authorization in runtime-state.json, browser Profiles, or config files. Do not echo or log credentials unnecessarily.
 
+## Startup and connection failure diagnosis
+
+If the first browser call, especially `list_pages` or `new_page`, reports that it cannot connect to Chrome, or cannot fetch `http://127.0.0.1:9222/json/version`, treat that as a local runtime startup problem before trying more page navigation.
+
+- Check whether `127.0.0.1:9222` is listening and whether the owner is the dedicated `chrome.exe` or `msedge.exe` process for the configured Profile.
+- Check `%LOCALAPPDATA%\HumanBrowser\` for current runtime state, stale `runtime-state.json.*.tmp` files, encryption-shadow files, and the recorded browser PID.
+- If the recorded browser PID is dead or no dedicated browser CDP listener exists, the runtime must be able to launch a browser and write runtime state outside the workspace.
+- If the host sandbox is workspace-only or denies access to `%LOCALAPPDATA%\HumanBrowser`, the browser executable, the dedicated browser Profile, or loopback `127.0.0.1:9222`, tell the user the MCP cannot start or recover the browser under the current sandbox.
+- After confirming the likely sandbox restriction, proactively ask the user to raise permission if the host supports an approval/permission prompt. Do not merely report the failure and wait silently.
+- If the host cannot auto-escalate, clearly tell the user to check and set the agent permission to full access / never-ask / unrestricted, or to allow the specific local paths and loopback `127.0.0.1:9222` port.
+- Full access is the safest diagnostic baseline when sandbox rules make it impossible to distinguish a real browser failure from a sandbox denial.
+
 ## Workflow
 
 1. Call chrome_devtools list_pages. The lazy runtime starts or reuses the browser on this first tools/call.
@@ -55,6 +67,7 @@ The user's requested outcome defines the authorized scope. Do not ask for anothe
 | AI-only completion is impossible | Ask the user to handle the blocked step, then resume |
 | Verification is unresolved after attempt 1 or 2 | Refresh evidence and make at most the next bounded attempt |
 | Verification is unresolved after attempt 3 | Stop all automated attempts and wait for manual completion |
+| `127.0.0.1:9222` unavailable, stale runtime state, or sandbox blocks AppData/Profile access | Check sandbox execution permission, then proactively ask the user to raise permission or tell the user to set permission to full access / never-ask / unrestricted or allow specific local paths and loopback port |
 | webdriver is true | Diagnose the attachment and dedicated Profile |
 | Page or MCP connection recovered | Refresh list_pages, snapshot, and webdriver |
 | Requested external action completed | Verify the destination or server-side result |
