@@ -59,7 +59,7 @@ about:blank
 
 The MCP child receives --browser-url=http://127.0.0.1:9222. Current chrome-devtools-mcp releases require pageId routing by default, so the obsolete explicit --page-id-routing argument is omitted. Do not add --no-page-id-routing.
 
-The default package is chrome-devtools-mcp@latest. If change control requires pinning, pin an exact tested version in config.json and run the unit and live smoke suites before upgrading. For stricter privacy, supported MCP flags such as --no-usage-statistics and --no-performance-crux can be added to mcpArgs.
+The default package is chrome-devtools-mcp@1.8.0. To upgrade, pin a newer exact version in config.json and run the unit and live smoke suites before switching over. For stricter privacy, supported MCP flags such as --no-usage-statistics and --no-performance-crux can be added to mcpArgs.
 
 ## Runtime files
 

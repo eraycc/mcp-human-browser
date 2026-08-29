@@ -24,7 +24,7 @@ function createDefaults(localAppData = process.env.LOCALAPPDATA) {
     debuggingPort: 9222,
     headless: false,
     browserStartupTimeoutMs: 30000,
-    mcpPackage: 'chrome-devtools-mcp@latest',
+    mcpPackage: 'chrome-devtools-mcp@1.8.0',
     mcpArgs: [],
     extraBrowserArgs: [],
     guardTimeoutMs: 5000,

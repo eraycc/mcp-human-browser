@@ -146,7 +146,7 @@ rejected with a clear error.
 | `debuggingPort` | `9222` | Integer 1024–65535. |
 | `headless` | `false` | Must remain `false`. |
 | `browserStartupTimeoutMs` | `30000` | ≥ 1000 ms. |
-| `mcpPackage` | `chrome-devtools-mcp@latest` | Pin an exact tested version for change control. |
+| `mcpPackage` | `chrome-devtools-mcp@1.8.0` | Pin an exact tested version for change control. |
 | `mcpArgs` | `[]` | Extra MCP flags (e.g. `--no-usage-statistics`). Must not include `--browser-url`. |
 | `extraBrowserArgs` | `[]` | Extra browser flags; forbidden automation/stealth flags are rejected. |
 | `guardTimeoutMs` | `5000` | State-file guard acquisition window. |
