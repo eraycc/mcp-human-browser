@@ -8,7 +8,7 @@ Read this reference when chrome_devtools configuration, 127.0.0.1:9222, browser 
 [mcp_servers.chrome_devtools]
 command = "node"
 args = [
-  "loacl-path\\mcp-human-browser\\scripts\\start-mcp.js"
+  "C:\\path\\to\\mcp-human-browser\\scripts\\start-mcp.js"
 ]
 startup_timeout_sec = 30
 tool_timeout_sec = 120
@@ -26,7 +26,7 @@ Changing config.toml requires a Codex or IDE restart because an active STDIO MCP
 For a live protocol and lifecycle smoke test:
 
 ~~~powershell
-node loacl-path\mcp-human-browser\scripts\tests\live-smoke.js
+node C:\path\to\mcp-human-browser\scripts\tests\live-smoke.js
 ~~~
 
 The smoke test exits nonzero unless all required invariants hold: listenerBefore=false, listenerAfterInitialize=false, listenerDuring=true, navigator.webdriver=false, pageIdRequired=true, unknownArgumentWarning=false, and listenerAfterExit=false.
@@ -66,11 +66,13 @@ The default package is chrome-devtools-mcp@1.8.0. To upgrade, pin a newer exact 
 ~~~text
 %LOCALAPPDATA%\HumanBrowser\
 ├── config.json
-├── runtime-state.json
+├── runtime-state.jsonl
 └── runtime-state.guard
 ~~~
 
-config.json is optional. See config.example.json for supported values. runtime-state.json records active wrapper sessions and the selected browser fingerprint.
+config.json is optional. See config.example.json for supported values. `runtime-state.jsonl` (a single-line JSON document) records active wrapper sessions and the selected browser fingerprint. Legacy `runtime-state.json` files (if any exist from earlier versions) are ignored and may be deleted. If `runtime-state.jsonl` is missing, unreadable, or unwritable, the wrapper degrades to in-memory state and still launches the browser on default parameters, so startup is never blocked by a broken state file.
+
+On startup the wrapper also sweeps out orphaned `start-mcp.js` processes (parent already exited); live wrappers are never touched.
 
 ## Read-only diagnosis
 
@@ -106,6 +108,7 @@ Expected conditions:
 - A browser launched by the wrapper is shared by all live wrapper sessions.
 - Closing one Codex session retains the browser while another session is registered.
 - The final session closes only a wrapper-owned process whose recorded fingerprint and exact listener ownership still match.
+- The wrapper also exposes `close_browser_window`, a local tool for browser-window closure authorized by the current task semantics. Its call-scoped intent is not persisted. Because the dedicated window is shared, any registered agent with explicit user close intent may atomically claim its full wrapper-owned browser fingerprint and close it; competing callers receive `BROWSER_NOT_READY`, and other sessions reconnect or relaunch on their next browser tool call.
 - A dedicated Profile open without the configured CDP listener is reported as BROWSER_PROFILE_IN_USE; close that dedicated window and call the browser tool again.
 - Startup failure or timeout terminates the new process tree and reports a bounded tail of browser stderr when available.
 - If chrome_devtools tools are missing after changing config.toml, restart Codex or the IDE first. Raw CDP checks are diagnostic only and do not replace the MCP protocol.

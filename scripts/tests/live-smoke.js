@@ -133,7 +133,25 @@ async function collectSmokeResults() {
   }, 30000);
   if (evaluated.error) throw new Error(`evaluate_script failed: ${JSON.stringify(evaluated.error)}`);
 
+  const closed = await request(5, 'tools/call', {
+    name: 'close_browser_window',
+    arguments: {
+      intent: 'close-after-task',
+      reason: 'live smoke browser task completed'
+    },
+  }, 30000);
+  if (closed.error) {
+    throw new Error(`close_browser_window failed: ${JSON.stringify(closed.error)}`);
+  }
+  let closeResult = {};
+  try {
+    closeResult = JSON.parse(responseText(closed));
+  } catch {
+    closeResult = {};
+  }
+
   result.webdriver = parseWebdriver(evaluated);
+  result.explicitClose = closeResult.closed === true;
   result.protocolVersion = initialized.result?.protocolVersion;
   result.unknownArgumentWarning = /Unknown arguments?/i.test(stderr);
   return result;

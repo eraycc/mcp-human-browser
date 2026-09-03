@@ -12,7 +12,8 @@ const healthy = {
   listenerAfterExit: false,
   webdriver: false,
   pageIdRequired: true,
-  unknownArgumentWarning: false
+  unknownArgumentWarning: false,
+  explicitClose: true
 };
 
 test('live smoke accepts the required lazy visible-browser invariants', () => {
@@ -27,5 +28,15 @@ test('live smoke rejects webdriver automation and lifecycle regressions', () => 
       webdriver: true
     }),
     /listenerDuring must be true.*navigator\.webdriver must be false/
+  );
+});
+
+test('live smoke requires the explicitly authorized close tool to succeed', () => {
+  assert.throws(
+    () => assertSmokeResults({
+      ...healthy,
+      explicitClose: false
+    }),
+    /explicitClose must be true/
   );
 });

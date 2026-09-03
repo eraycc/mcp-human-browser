@@ -8,6 +8,7 @@ function collectSmokeFailures(result) {
     ['navigator.webdriver must be false', result.webdriver === false],
     ['pageIdRequired must be true', result.pageIdRequired === true],
     ['unknownArgumentWarning must be false', result.unknownArgumentWarning === false],
+    ['explicitClose must be true', result.explicitClose === true],
     ['listenerAfterExit must be false', result.listenerAfterExit === false],
   ];
 

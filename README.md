@@ -58,12 +58,27 @@ start-mcp.js  ──  mcp-proxy.js  ──►  chrome-devtools-mcp (npx child)
   `--enable-automation`, `--remote-debugging-pipe`, automation/stealth/fingerprint
   flags) are rejected.
 - **Shared, multi-session browser** — A wrapper-launched browser is shared by
-  all live wrapper sessions (tracked in `runtime-state.json`). Closing one
-  session keeps it alive; the **final** session closes only the
-  wrapper-owned process whose fingerprint still matches.
+  all live wrapper sessions (tracked in `runtime-state.jsonl`). Closing one
+  session normally keeps it alive; the **final** session closes only the
+  wrapper-owned process whose fingerprint still matches. An explicit authorized
+  close may end the shared window earlier.
+- **Explicit, authorized close** — The wrapper exposes a local
+  `close_browser_window` tool that the agent calls when the current task
+  semantics authorize closing the dedicated browser window. The current call
+  carries the close intent; authorization is not persisted. Because the window
+  itself is shared, any registered agent may atomically claim and close the
+  wrapper-owned browser after its full process fingerprint is captured. Other
+  sessions reconnect or relaunch on their next browser tool call.
 - **Recovery** — If the MCP child exits, the proxy restarts it and
   re-`initialize`s; pending calls fail with a clear `MCP_CHILD_RESTARTED`
   instruction to re-acquire `list_pages` and a fresh snapshot.
+- **Startup cleanup** — On start, the wrapper sweeps out **orphaned**
+  `start-mcp.js` processes (whose parent process has already exited). Live
+  wrappers — including other agents' wrappers — are never touched.
+- **Resilient state** — The state file is `runtime-state.jsonl`
+  (JSON Lines), not `.json`. If the state file is missing,
+  unreadable, or unwritable, the wrapper degrades to in-memory state and
+  launches the browser on its default parameters instead of blocking.
 
 ## Repository layout
 
@@ -159,9 +174,13 @@ Runtime files live under `%LOCALAPPDATA%\HumanBrowser\`:
 ```
 %LOCALAPPDATA%\HumanBrowser\
 ├── config.json            (optional)
-├── runtime-state.json     (sessions + browser fingerprint)
+├── runtime-state.jsonl    (sessions + browser fingerprint; JSON Lines)
 └── runtime-state.guard    (write guard)
 ```
+
+`runtime-state.jsonl` is a single-line JSON document. It is written to a
+`.jsonl` temp file and atomically renamed. A legacy `runtime-state.json` is
+ignored; it is never read from.
 
 ## Usage
 
@@ -207,8 +226,11 @@ The live smoke test enforces: `listenerBefore=false`,
 - **Dedicated profiles** isolate the agent's browser state from your everyday
   browser.
 - **No headless / no automation flags** — the browser is a visible, real one.
-- **Conversation authorization is never persisted** to `runtime-state.json`,
+- **Conversation authorization is never persisted** to `runtime-state.jsonl`,
   browser profiles, or config files, and credentials are not echoed or logged.
+- **Orphan cleanup is self-scoped** — the startup sweep only kills
+  `start-mcp.js` processes whose parent has exited; it never kills live
+  wrappers from other agents.
 
 ## Troubleshooting
 
@@ -218,6 +240,11 @@ The live smoke test enforces: `listenerBefore=false`,
 - **`BROWSER_PROFILE_IN_USE`** → close the dedicated browser window and retry.
 - **Port 9222 unavailable / occupied by the wrong process** → see the
   read-only diagnosis commands in `references/windows-9222.md`.
+- **State file is missing or unwritable** → the wrapper persists to
+  `runtime-state.jsonl` and degrades to in-memory state if the file is
+  unreadable or unwritable, so startup is never blocked. If you still see a
+  stale `runtime-state.json` from an earlier version, it is ignored; you may
+  delete it and any stale `start-mcp.js` processes manually.
 
 ## References
 

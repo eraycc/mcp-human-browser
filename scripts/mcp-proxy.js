@@ -25,8 +25,55 @@ function cloneMessage(message) {
   return JSON.parse(JSON.stringify(message));
 }
 
+function isLocalTool(name) {
+  return String(name || '') === 'close_browser_window';
+}
+
+function localToolSchema() {
+  return {
+    type: 'object',
+    properties: {
+      intent: {
+        type: 'string',
+        enum: ['keep', 'close-after-requested', 'close-after-task'],
+        description: 'Authorization intent for the current MCP session. The agent must only set close-* when the user explicitly authorized closing the dedicated browser window.'
+      },
+      reason: {
+        type: 'string',
+        description: 'Short human-readable reason for the authorization. Do not include credentials.'
+      }
+    },
+    additionalProperties: false
+  };
+}
+
+function localToolList() {
+  return {
+    close_browser_window: {
+      name: 'close_browser_window',
+      description: 'Close the shared mcp-human-browser dedicated browser window when the user explicitly authorized closing it. Any registered agent session may close a wrapper-owned browser; other sessions reconnect or relaunch on their next browser tool call.',
+      inputSchema: localToolSchema()
+    }
+  };
+}
+
 function createMcpProxy(options) {
   const { clientInput, clientOutput, spawnChild, ensureBrowser } = options;
+  const claimBrowserClose = options.claimBrowserClose || (async () => ({
+    allowed: false,
+    closeNow: false,
+    reason: 'BROWSER_CLOSE_PLAN_UNAVAILABLE',
+    browserPid: null,
+    cleanupToken: null,
+    sharedByOtherSessions: false
+  }));
+  const completeBrowserCleanup = options.completeBrowserCleanup || (async () => {
+    throw new Error('BROWSER_CLEANUP_COMPLETION_UNAVAILABLE');
+  });
+  const abortBrowserCleanup = options.abortBrowserCleanup || (async () => {});
+  const closeOwnedBrowser = options.closeOwnedBrowser || (async () => {
+    throw new Error('BROWSER_CLOSE_HANDLER_UNAVAILABLE');
+  });
   const log = options.log || (() => {});
   const initializeTimeoutMs = options.initializeTimeoutMs || 10000;
   const maxRestartAttempts = options.maxRestartAttempts || 2;
@@ -40,6 +87,8 @@ function createMcpProxy(options) {
   let reinitialize = null;
   let permanentlyFailed = false;
   const pending = new Map();
+  const localRequests = new Set();
+  const inFlightLocalCalls = new Set();
 
   function unavailableMessage(detail) {
     return 'MCP_CHILD_UNAVAILABLE: ' + detail;
@@ -51,6 +100,25 @@ function createMcpProxy(options) {
       id: id === undefined ? null : id,
       error: { code, message }
     });
+  }
+
+  function emitResult(id, result) {
+    writeJsonLine(clientOutput, {
+      jsonrpc: '2.0',
+      id,
+      result
+    });
+  }
+
+  function mergeToolsListMessage(result) {
+    const tools = Array.isArray(result && result.tools) ? result.tools : [];
+    return {
+      ...result,
+      tools: [
+        ...Object.values(localToolList()),
+        ...tools
+      ]
+    };
   }
 
   function sendToChild(message) {
@@ -77,6 +145,7 @@ function createMcpProxy(options) {
       );
     }
     pending.clear();
+    localRequests.clear();
   }
 
   async function waitForChildReady() {
@@ -102,10 +171,131 @@ function createMcpProxy(options) {
     }
   }
 
+  function isAuthorizedIntent(intent) {
+    return intent === 'close-after-requested' || intent === 'close-after-task';
+  }
+
+  async function handleLocalToolsCall(id, params) {
+    const args = params && typeof params === 'object' && params.arguments
+      ? params.arguments
+      : {};
+    const intent = isAuthorizedIntent(args.intent) ? args.intent : 'keep';
+    const reason = String(args.reason || '').trim();
+    if (!isAuthorizedIntent(intent)) {
+      return {
+        closed: false,
+        authorized: false,
+        intent: 'keep',
+        reason: 'BROWSER_CLOSE_NOT_AUTHORIZED',
+        browserPid: null,
+        sharedByOtherSessions: false
+      };
+    }
+
+    const plan = await claimBrowserClose(intent);
+    let result = {
+      closed: false,
+      authorized: true,
+      intent,
+      reason: plan.reason || 'BROWSER_CLOSE_PLAN_UNAVAILABLE',
+      browserPid: plan.browserPid || null,
+      sharedByOtherSessions: Boolean(plan.sharedByOtherSessions)
+    };
+    if (plan.closeNow && plan.allowed) {
+      if (!plan.browser || !plan.cleanupToken) {
+        throw new Error('BROWSER_CLOSE_CLAIM_INCOMPLETE');
+      }
+      try {
+        await closeOwnedBrowser(plan.browser);
+        await completeBrowserCleanup(plan.cleanupToken);
+      } catch (error) {
+        await abortBrowserCleanup(plan.cleanupToken, error.message).catch(
+          abortError => log(
+            'failed to abort browser cleanup claim: ' + abortError.message
+          )
+        );
+        throw error;
+      }
+      result = {
+        ...result,
+        closed: true,
+        reason: 'CLOSE_ALLOWED',
+        method: 'session-owned-browser-closed',
+        browserPid: plan.browser.pid || plan.browserPid || null
+      };
+      log(
+        'close_browser_window: closed wrapper-owned browser pid=' +
+        (plan.browser.pid || 'unknown') +
+        (reason ? '; reason=' + reason : '')
+      );
+    }
+    return result;
+  }
+
   async function routeClientMessage(message) {
-    if (message.method === 'initialize') cachedInitialize = cloneMessage(message);
+    if (message.method === 'initialize') {
+      cachedInitialize = cloneMessage(message);
+      if (message.id !== undefined) localRequests.add(message.id);
+      try {
+        await forward(message);
+      } catch (error) {
+        if (message.id !== undefined) localRequests.delete(message.id);
+        emitError(message.id, -32072, error.message);
+      }
+      return;
+    }
     if (message.method === 'notifications/initialized') {
       cachedInitialized = cloneMessage(message);
+      try {
+        await forward(message);
+      } catch (error) {
+        log('failed to forward notifications/initialized: ' + error.message);
+      }
+      return;
+    }
+
+    if (message.method === 'tools/list') {
+      try {
+        await forward(message);
+      } catch (error) {
+        emitError(message.id, -32072, error.message);
+      }
+      return;
+    }
+
+    if (message.method === 'tools/call' &&
+        isLocalTool(message.params && message.params.name)) {
+      const operation = (async () => {
+        try {
+          const result = await handleLocalToolsCall(message.id, message.params);
+          emitResult(message.id, {
+            content: [{
+              type: 'text',
+              text: JSON.stringify(result)
+            }],
+            isError: false
+          });
+        } catch (error) {
+          emitResult(message.id, {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                closed: false,
+                reason: 'BROWSER_CLOSE_FAILED',
+                detail: error.message
+              })
+            }],
+            isError: true
+          });
+        }
+      })();
+      inFlightLocalCalls.add(operation);
+      try {
+        await operation;
+      } finally {
+        inFlightLocalCalls.delete(operation);
+      }
+      return;
     }
 
     if (message.method !== 'tools/call') {
@@ -149,7 +339,14 @@ function createMcpProxy(options) {
   );
 
   function handleChildMessage(message) {
-    if (reinitialize && message.id === reinitialize.id) {
+    const isResponse = message &&
+      message.method === undefined &&
+      message.id !== undefined &&
+      (
+        Object.prototype.hasOwnProperty.call(message, 'result') ||
+        Object.prototype.hasOwnProperty.call(message, 'error')
+      );
+    if (isResponse && reinitialize && message.id === reinitialize.id) {
       if (message.error) {
         rejectReinitialize(
           new Error(
@@ -166,7 +363,37 @@ function createMcpProxy(options) {
       current.resolve();
       return;
     }
-    if (message.id !== undefined) pending.delete(message.id);
+    if (isResponse && localRequests.has(message.id)) {
+      localRequests.delete(message.id);
+      if (message.id !== undefined) pending.delete(message.id);
+      if (message.error) {
+        emitError(
+          message.id,
+          message.error.code || -32603,
+          (cachedInitialize && 'initialize failed: ' || '') +
+          (message.error.message || 'MCP initialize failed')
+        );
+        return;
+      }
+      if (cachedInitialize) {
+        emitResult(cachedInitialize.id, message.result);
+      }
+      if (cachedInitialized) sendToChild(cachedInitialized);
+      return;
+    }
+    const pendingRequest = isResponse
+      ? pending.get(message.id)
+      : null;
+    if (isResponse) pending.delete(message.id);
+    if (pendingRequest &&
+        pendingRequest.method === 'tools/list' &&
+        message.result) {
+      writeJsonLine(clientOutput, {
+        ...message,
+        result: mergeToolsListMessage(message.result)
+      });
+      return;
+    }
     writeJsonLine(clientOutput, message);
   }
 
@@ -278,6 +505,9 @@ function createMcpProxy(options) {
     stopping = true;
     clientInput.off('data', onClientData);
     rejectReinitialize(new Error('MCP proxy is stopping'));
+    if (inFlightLocalCalls.size > 0) {
+      await Promise.allSettled([...inFlightLocalCalls]);
+    }
     const current = child;
     child = null;
     if (current && current.stdin && !current.stdin.destroyed) current.stdin.end();

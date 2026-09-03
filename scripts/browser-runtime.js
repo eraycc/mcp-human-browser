@@ -152,8 +152,24 @@ function createBrowserRuntime(options) {
     throw new Error('BROWSER_STARTUP_BUSY_TIMEOUT');
   }
 
-  async function ensureBrowserOnce() {
-    const snapshot = await registry.getSnapshot();
+  async function waitForBrowserClose(deadline) {
+    while (now() < deadline) {
+      const snapshot = await registry.getSnapshot();
+      if (!snapshot.browser || snapshot.browser.phase !== 'closing') {
+        return snapshot;
+      }
+      await sleep(100);
+    }
+    throw new Error('BROWSER_CLOSE_BUSY_TIMEOUT');
+  }
+
+  async function ensureBrowserOnce(staleRetry = 0) {
+    let snapshot = await registry.getSnapshot();
+    if (snapshot.browser && snapshot.browser.phase === 'closing') {
+      snapshot = await waitForBrowserClose(
+        now() + config.browserStartupTimeoutMs
+      );
+    }
     try {
       const existing = await probeBrowser();
       if (existing.ready) {
@@ -169,12 +185,50 @@ function createBrowserRuntime(options) {
       if (!String(error.message).startsWith('connect ECONNREFUSED')) throw error;
     }
 
+    if (snapshot.browser &&
+        snapshot.browser.phase === 'ready' &&
+        typeof registry.clearBrowserRecord === 'function') {
+      const cleared = await registry.clearBrowserRecord(snapshot.browser);
+      const didClear = Boolean(
+        cleared && (
+          (cleared.result && cleared.result.cleared) ||
+          cleared.cleared
+        )
+      );
+      if (!didClear) {
+        if (staleRetry < 2) return ensureBrowserOnce(staleRetry + 1);
+        throw new Error('BROWSER_STATE_CHANGED_DURING_STALE_CLEANUP');
+      }
+      snapshot = await registry.getSnapshot();
+    }
+
     const selection = adapter.resolveBrowser(config);
     const claim = await registry.claimBrowserLaunch({
       ...selection,
       debuggingPort: config.debuggingPort
     });
-    if (claim.status === 'ready') return claim.browser;
+    if (claim.status === 'ready') {
+      // Degraded (state file unavailable) mode: the claim is not shared with
+      // other wrappers, so launch directly on the default parameters. The MCP
+      // child connects to the live loopback CDP endpoint regardless, so no
+      // startup blocking occurs.
+      if (claim.degraded) {
+        return launchDegradeTolerant(selection);
+      }
+      const claimedProbe = await probeBrowser();
+      if (claimedProbe.ready &&
+          claim.browser &&
+          claim.browser.pid === claimedProbe.record.pid &&
+          claim.browser.processCreatedAt === claimedProbe.record.processCreatedAt) {
+        return claim.browser;
+      }
+      if (typeof registry.clearBrowserRecord === 'function') {
+        await registry.clearBrowserRecord(claim.browser);
+      }
+      if (staleRetry < 2) return ensureBrowserOnce(staleRetry + 1);
+      throw new Error('BROWSER_STALE_READY_RECORD');
+
+    }
     if (claim.status === 'waiting') {
       const record = await waitForOtherSession(now() + config.browserStartupTimeoutMs);
       if (record) return record;
@@ -221,6 +275,55 @@ function createBrowserRuntime(options) {
         }
       }
       await registry.failBrowserLaunch(claim.token, failure.message);
+      throw failure;
+    }
+  }
+
+  // Launch used when the shared state file is unavailable (degraded mode).
+  // It intentionally skips the claim bookkeeping (claim/complete/fail) that
+  // requires a writable state file; the MCP child reaches the browser through
+  // the live loopback CDP endpoint, so correctness does not depend on the
+  // persisted record.
+  async function launchDegradeTolerant(selection) {
+    let launched = null;
+    try {
+      if (await profileInUse(selection)) {
+        throw new Error(
+          'BROWSER_PROFILE_IN_USE: close the dedicated ' + selection.kind + ' window'
+        );
+      }
+      if (typeof adapter.ensureProfileWritable === 'function') {
+        await adapter.ensureProfileWritable(selection);
+      }
+      launched = await adapter.launchBrowser(
+        selection,
+        adapter.buildBrowserArgs(config, selection)
+      );
+      const record = await waitForReady(
+        selection,
+        now() + config.browserStartupTimeoutMs
+      );
+      record.launchedByWrapper = true;
+      return record;
+    } catch (error) {
+      const stderrTail = launched &&
+        typeof launched.getStderrTail === 'function'
+        ? launched.getStderrTail()
+        : '';
+      const failure = stderrTail
+        ? new Error(error.message + '; browser stderr: ' + stderrTail)
+        : error;
+      if (launched && Number.isInteger(launched.pid) && launched.pid > 0) {
+        try {
+          await adapter.terminateProcessTree(launched.pid);
+        } catch (cleanupError) {
+          log(
+            'failed to clean up browser after launch error: ' +
+            cleanupError.message
+          );
+        }
+      }
+      log('degraded-mode browser launch failed: ' + failure.message);
       throw failure;
     }
   }
