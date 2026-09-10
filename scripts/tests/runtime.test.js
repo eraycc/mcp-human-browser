@@ -85,7 +85,7 @@ test('browser and MCP arguments use visible loopback mode', () => {
   ]);
   assert.deepEqual(buildMcpArgs(config), [
     '-y',
-    'chrome-devtools-mcp@1.8.0',
+    'chrome-devtools-mcp@1.9.0',
     '--browser-url=http://127.0.0.1:9222'
   ]);
   assert.throws(
